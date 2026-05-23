@@ -315,10 +315,23 @@ def run_pipeline(
 
 if __name__ == "__main__":
     print("QuantBet - uruchamianie pipeline (dane syntetyczne)...")
-    results, _test, metrics, auc = run_pipeline(n_matches=5000)
-    print(f"ROC-AUC (test): {auc:.4f} | Log-loss: {metrics['log_loss']:.4f}")
-    print(
-        f"Zaklady: {int(metrics['total_bets'])} | ROI: {metrics['roi']:.2f}% | "
-        f"CLV: {metrics['avg_clv']:.2f}% | Max DD: {metrics['max_drawdown_pct']:.1f}%"
-    )
-    print(f"Bankroll koncowy: {metrics['final_bankroll']:.2f}")
+    results, _test, metrics, auc = run_pipeline(n_matches=10000)
+    print(f"ROC-AUC (test): {auc:.4f} | Log-loss: {metrics.get('log_loss', 0.0):.4f}")
+    
+    print("\n--- Wyniki Backtestu ---")
+    print(f"Zaklady postawione: {int(metrics.get('total_bets', 0))}")
+    print(f"ROI: {metrics.get('roi', 0.0):.2f}%")
+    print(f"Poczatkowy bankroll: 10000.00 -> Koncowy: {metrics.get('final_bankroll', 0.0):.2f}")
+    print(f"CLV Srednie: {metrics.get('avg_clv', 0.0):.2f}%")
+    print(f"Srednia Wartosc Oczekiwana (EV) postawionych zakladow: {metrics.get('avg_bet_ev_pct', 0.0):.2f}%")
+    print(f"Max Drawdown: {metrics.get('max_drawdown_pct', 0.0):.1f}%")
+    print(f"Sharpe Ratio: {metrics.get('sharpe_ratio', 0.0):.2f}")
+    
+    print("\n--- Dokladnosc Flagowania Betów ---")
+    print(f"Win Rate dla postawionych zakladow: {metrics.get('bet_win_rate_pct', 0.0):.2f}%")
+    print(f"Implied Win Rate z kursu: {metrics.get('implied_win_rate_pct', 0.0):.2f}%")
+    print(f"Przecietne P(Win) z modelu: {metrics.get('model_p_mean_pct', 0.0):.2f}%")
+    
+    # Save the log
+    results.to_csv("backtest_results.csv", index=False)
+    print("\nZapisano backtest_results.csv")

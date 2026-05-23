@@ -6,15 +6,35 @@ import re
 from typing import List
 
 import pandas as pd
+from textblob import TextBlob
 
 # Rozszerzaj liste w miare potrzeb (PL + EN)
 SIGNAL_PATTERNS = {
     "injury": re.compile(r"injur|kontuzj|hurt|withdraw|ruled out|nie zagra", re.I),
     "roster": re.compile(r"roster|sklad|lineup|bench|zawieszon", re.I),
     "form": re.compile(r"win streak|seria|upset|nokaut|dominacj", re.I),
-    "hype": re.compile(r"favorite|faworyt|must.?win|final|playoff", re.I),
+    "hype": re.compile(r"favorite|faworyt|must.?win|final|playoff|zmiażdży|zniszczy|hype", re.I),
 }
 
+def analyze_sentiment(text: str) -> float:
+    """Zwraca wynik sentymentu od -1.0 (negatywny) do 1.0 (pozytywny)."""
+    if not isinstance(text, str):
+        return 0.0
+    return TextBlob(text).sentiment.polarity
+
+def calculate_hype_score(df: pd.DataFrame, text_col: str = "caption") -> pd.DataFrame:
+    """Tworzy Hype Score na podstawie sentymentu wpisow/wiadomosci."""
+    if df.empty or text_col not in df.columns:
+        return df
+    
+    out = df.copy()
+    out["sentiment"] = out[text_col].apply(analyze_sentiment)
+    # Hype Score np. polaczenie lajkow i sentimentu w przypaku Instagrama:
+    if "likes" in out.columns:
+        out["hype_score"] = out["sentiment"] * out["likes"].apply(lambda x: min(float(x)/1000.0, 10.0))
+    else:
+        out["hype_score"] = out["sentiment"] * 5.0 # Skalowanie
+    return out
 
 def annotate_news(df: pd.DataFrame) -> pd.DataFrame:
     """Dodaje kolumny sygnalow do tabeli z RSS (title + summary)."""

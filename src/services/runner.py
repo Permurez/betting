@@ -14,6 +14,8 @@ from collectors.news_rss import RSSNewsCollector
 from collectors.odds_api import TheOddsAPICollector
 from collectors.riot_lol import RiotLoLCollector
 from collectors.social_instagram import InstagramCollector
+from collectors.hype_crawler import HypeCrawler
+from collectors.reddit_crawler import RedditCrawler
 from collectors.stats_pandascore import PandaScoreCollector
 from config_loader import get_cache_dir, load_pipeline_config
 from storage.db import insert_event
@@ -64,8 +66,13 @@ class CollectorRunner:
             self._save(results["riot"])
 
         if include_instagram:
-            results["instagram"] = InstagramCollector().safe_fetch()
-            self._save(results["instagram"])
+            # Zastepujemy niestabilny Instagram calkowicie legalnym i otwartym na zawsze darmowym Web Crawlerem
+            results["hype"] = HypeCrawler().safe_fetch()
+            self._save(results["hype"])
+            
+            # Dokladamy reddita dla twardych opinii tłumu
+            results["reddit"] = RedditCrawler().safe_fetch()
+            self._save(results["reddit"])
 
         if include_stats:
             results["stats"] = PandaScoreCollector().safe_fetch()

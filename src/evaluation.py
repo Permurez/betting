@@ -51,4 +51,16 @@ def enrich_backtest_metrics(
     }
     if len(placed) > 0 and "closing_odds" in placed.columns:
         extra["avg_clv"] = float(((placed["bet_odds"] / placed["closing_odds"]) - 1).mean() * 100)
+    
+    # Analyze betting accuracy (precision of modeled advantageous bets)
+    if len(placed) > 0 and "target" in df.columns:
+        wins = placed["strategy_return"] > 0
+        extra["bet_win_rate_pct"] = float(wins.mean() * 100)
+        
+        # Mean implied probability of bets vs actual win probability
+        # to see if model correctly flagged them
+        implied_prob = 1.0 / placed["bet_odds"]
+        extra["implied_win_rate_pct"] = float(implied_prob.mean() * 100)
+        extra["model_p_mean_pct"] = float(placed["p_model"].mean() * 100)
+        
     return extra
