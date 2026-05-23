@@ -1,0 +1,38 @@
+# Zrodla danych QuantBet – edytuj wedlug potrzeb
+
+odds:
+  # Darmowy tier: https://the-odds-api.com/ (klucz w .env jako ODDS_API_KEY)
+  provider: the_odds_api
+  sports:
+    - esports_csgo
+    - esports_lol
+    - esports_dota2
+  regions: eu
+  markets: h2h
+  odds_format: decimal
+
+news:
+  rss_feeds:
+    - name: HLTV News
+      url: https://www.hltv.org/rss/news
+    - name: Dot Esports
+      url: https://dotesports.com/feed
+    - name: Dexerto Esports
+      url: https://www.dexerto.com/esports/feed
+
+social:
+  instagram:
+    # Publiczne profile (wymaga opcjonalnego instaloader + ostroznie z ToS Meta)
+    handles: []
+    max_posts_per_handle: 15
+
+stats:
+  pandascore:
+    # https://pandascore.co/ – klucz PANDASCORE_API_KEY w .env
+    enabled: false
+    games:
+      - csgo
+      - lol
+
+storage:
+  cache_dir: data/cache

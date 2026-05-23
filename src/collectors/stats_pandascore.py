@@ -1,0 +1,77 @@
+"""Statystyki meczow e-sport – PandaScore API (opcjonalnie)."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import List
+
+import httpx
+import pandas as pd
+
+from collectors.base import BaseCollector, CollectorResult
+from config_loader import env, load_sources_config
+
+API_BASE = "https://api.pandascore.co"
+
+
+class PandaScoreCollector(BaseCollector):
+    name = "pandascore"
+
+    def __init__(self, api_key: str | None = None):
+        self.api_key = api_key or env("PANDASCORE_API_KEY")
+        cfg = load_sources_config().get("stats", {}).get("pandascore", {})
+        self.enabled = cfg.get("enabled", False)
+        self.games: List[str] = cfg.get("games", ["csgo"])
+
+    def fetch(self) -> CollectorResult:
+        if not self.enabled:
+            return CollectorResult(
+                name=self.name,
+                success=False,
+                data=pd.DataFrame(),
+                message="PandaScore wylaczony w config/sources.yaml (stats.pandascore.enabled: true).",
+            )
+        if not self.api_key:
+            return CollectorResult(
+                name=self.name,
+                success=False,
+                data=pd.DataFrame(),
+                message="Brak PANDASCORE_API_KEY w .env",
+            )
+
+        rows: List[dict] = []
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        now = datetime.now(timezone.utc)
+
+        with httpx.Client(timeout=30.0, headers=headers) as client:
+            for game in self.games:
+                # Nadchodzace mecze (upcoming)
+                url = f"{API_BASE}/{game}/matches/upcoming"
+                resp = client.get(url, params={"per_page": 50})
+                if resp.status_code != 200:
+                    continue
+                for m in resp.json():
+                    opponents = m.get("opponents", [])
+                    if len(opponents) < 2:
+                        continue
+                    rows.append(
+                        {
+                            "game": game,
+                            "match_id": m.get("id"),
+                            "name": m.get("name", ""),
+                            "team_a": opponents[0].get("opponent", {}).get("name", ""),
+                            "team_b": opponents[1].get("opponent", {}).get("name", ""),
+                            "begin_at": m.get("begin_at"),
+                            "league": m.get("league", {}).get("name", ""),
+                            "serie": m.get("serie", {}).get("full_name", ""),
+                            "fetched_at": now,
+                        }
+                    )
+
+        df = pd.DataFrame(rows)
+        return CollectorResult(
+            name=self.name,
+            success=not df.empty,
+            data=df,
+            message=f"Pobrano {len(df)} nadchodzacych meczow.",
+        )

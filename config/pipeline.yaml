@@ -1,0 +1,59 @@
+# Pipeline QuantBet – zrodla, opoznienia, modele, egzekucja
+# Opoznienie = ile minut PRZED meczem musi byc dostepna informacja (realizm backtestu)
+
+sources:
+  odds:
+    provider: the_odds_api
+    url: https://the-odds-api.com/
+    env_key: ODDS_API_KEY
+  news:
+    provider: rss
+    latency_minutes: 60
+  pandascore:
+    provider: pandascore
+    url: https://pandascore.co/
+    env_key: PANDASCORE_API_KEY
+    latency_minutes: 120
+  riot_lol:
+    provider: riot_games
+    url: https://developer.riotgames.com/
+    env_key: RIOT_API_KEY
+    region: europe
+    latency_minutes: 30
+    summoner_names: []
+  patches:
+    provider: datadragon
+    url: https://ddragon.leagueoflegends.com/
+    latency_minutes: 0
+
+sports:
+  primary: esports_lol
+  also:
+    - esports_csgo
+    - esports_dota2
+
+models:
+  baseline: lightgbm
+  neural: mlp
+  ensemble: true
+  # Wagi ensemble dopasowywane na zbiorze walidacyjnym (minimalizacja log-loss)
+
+backtest:
+  walk_forward_folds: 5
+  min_train_rows: 500
+  train_ratio: 0.70
+  val_ratio: 0.15
+
+execution:
+  # PAPER = symulacja | LIVE = wylaczone domyslnie (wymaga recznej zgody + brokera)
+  mode: PAPER
+  initial_bankroll: 10000
+  kelly_fraction: 0.10
+  min_ev: 0.03
+  max_stake_pct: 0.15
+
+scheduler:
+  interval_minutes: 30
+
+storage:
+  sqlite_path: data/quantbet.db

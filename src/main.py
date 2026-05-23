@@ -1,12 +1,21 @@
 import warnings
-from typing import Dict, List, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-import lightgbm as lgb
+import joblib
 import numpy as np
 import pandas as pd
-from sklearn.calibration import CalibratedClassifierCV
+
+from config_loader import load_pipeline_config, use_ensemble
+from evaluation import enrich_backtest_metrics, evaluate_classifier
+from features.lol_features import BASE_FEATURE_COLUMNS, resolve_feature_columns
+from models.ensemble import EnsembleModel
+from models.lgbm_model import QuantModel, MODELS_DIR
 
 warnings.filterwarnings("ignore")
+
+FEATURE_COLUMNS = BASE_FEATURE_COLUMNS
+TARGET_COLUMN = "target"
 
 
 def generate_full_pipeline_data(n_matches: int = 5000) -> pd.DataFrame:
@@ -117,40 +126,37 @@ def generate_features(df: pd.DataFrame) -> pd.DataFrame:
     return df.drop(columns=["team_a_win", "team_b_win"])
 
 
-class QuantModel:
-    def __init__(self, features: List[str]):
-        self.features = features
-        self.base_model = lgb.LGBMClassifier(
-            n_estimators=500,
-            learning_rate=0.05,
-            max_depth=4,
-            random_state=42,
-            n_jobs=-1,
-        )
-        self.calibrated_model = None
+def train_model(
+    feature_cols: List[str],
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    force_ensemble: Optional[bool] = None,
+) -> Union[QuantModel, EnsembleModel]:
+    use_ens = use_ensemble() if force_ensemble is None else force_ensemble
+    if use_ens:
+        model = EnsembleModel(feature_cols)
+    else:
+        model = QuantModel(feature_cols)
+    model.train(
+        train_df[feature_cols],
+        train_df[TARGET_COLUMN],
+        val_df[feature_cols],
+        val_df[TARGET_COLUMN],
+    )
+    return model
 
-    def train(
-        self,
-        X_train: pd.DataFrame,
-        y_train: pd.Series,
-        X_val: pd.DataFrame,
-        y_val: pd.Series,
-    ) -> None:
-        self.base_model.fit(
-            X_train,
-            y_train,
-            eval_set=[(X_val, y_val)],
-            callbacks=[lgb.early_stopping(30, verbose=False)],
-        )
-        self.calibrated_model = CalibratedClassifierCV(
-            estimator=self.base_model, method="sigmoid", cv="prefit"
-        )
-        self.calibrated_model.fit(X_val, y_val)
 
-    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
-        if self.calibrated_model is None:
-            raise ValueError("Model is not trained and calibrated yet.")
-        return self.calibrated_model.predict_proba(X)[:, 1]
+def save_trained_model(model: Union[QuantModel, EnsembleModel], path: Optional[Path] = None) -> Path:
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    out = path or MODELS_DIR / "quant_model.joblib"
+    payload: Dict[str, Any] = {"features": model.features, "type": "ensemble" if isinstance(model, EnsembleModel) else "lgbm"}
+    if isinstance(model, EnsembleModel):
+        payload["weights"] = model.weights_dict()
+        model.lgbm.save(MODELS_DIR / "_ens_lgbm.joblib")
+        joblib.dump(payload, out)
+    else:
+        model.save(out)
+    return Path(out)
 
 
 class VectorizedBacktester:
@@ -194,37 +200,125 @@ class VectorizedBacktester:
         df["strategy_return"] = df["stake_fraction"] * df["return_factor"]
         df["bankroll"] = self.bankroll * (1 + df["strategy_return"]).cumprod()
 
-        placed_bets = df[df["bet_side"] != "none"]
+        placed_mask = df["bet_side"] != "none"
+        placed_bets = df[placed_mask]
+        if len(placed_bets) > 0:
+            df.loc[placed_mask, "clv_pct"] = (
+                (df.loc[placed_mask, "bet_odds"] / df.loc[placed_mask, "closing_odds"]) - 1
+            ) * 100
+
+        margin = 1.0
+        df["p_market_home"] = margin / df["odds_home"]
+        df["edge_home_pct"] = (df["p_model"] - df["p_market_home"]) * 100
+
         metrics = {
             "total_bets": float(len(placed_bets)),
             "final_bankroll": float(df["bankroll"].iloc[-1]) if not df.empty else float(self.bankroll),
-            "roi": float(((df["bankroll"].iloc[-1] - self.bankroll) / self.bankroll * 100) if not df.empty else 0.0),
-            "win_rate": float((placed_bets["return_factor"] > 0).mean() * 100) if len(placed_bets) > 0 else 0.0,
-            "avg_clv": float(((placed_bets["bet_odds"] / placed_bets["closing_odds"]) - 1).mean() * 100) if len(placed_bets) > 0 else 0.0,
+            "roi": float(
+                ((df["bankroll"].iloc[-1] - self.bankroll) / self.bankroll * 100)
+                if not df.empty
+                else 0.0
+            ),
+            "win_rate": float((placed_bets["return_factor"] > 0).mean() * 100)
+            if len(placed_bets) > 0
+            else 0.0,
+            "avg_clv": float(
+                ((placed_bets["bet_odds"] / placed_bets["closing_odds"]) - 1).mean() * 100
+            )
+            if len(placed_bets) > 0
+            else 0.0,
         }
+        metrics.update(enrich_backtest_metrics(df, placed_mask, self.bankroll))
 
         return df, metrics
 
 
-def run_pipeline(n_matches: int = 5000) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, float]]:
-    raw_data = generate_full_pipeline_data(n_matches)
-    processed_data = generate_features(raw_data)
+FEATURE_COLUMNS = BASE_FEATURE_COLUMNS
+TARGET_COLUMN = "target"
 
-    n = len(processed_data)
-    train_df = processed_data.iloc[: int(n * 0.7)]
-    val_df = processed_data.iloc[int(n * 0.7) : int(n * 0.85)]
-    test_df = processed_data.iloc[int(n * 0.85) :].copy()
 
-    features = ["tA_winrate", "tB_winrate", "tA_kills", "tB_kills", "form_diff", "kills_diff"]
-    target = "target"
+def _cfg_ratios() -> Tuple[float, float]:
+    bt = load_pipeline_config().get("backtest", {})
+    return bt.get("train_ratio", 0.7), bt.get("val_ratio", 0.15)
 
-    model = QuantModel(features)
-    model.train(train_df[features], train_df[target], val_df[features], val_df[target])
 
-    preds = model.predict_proba(test_df[features])
+def temporal_split(
+    df: pd.DataFrame, train_ratio: float = 0.7, val_ratio: float = 0.15
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    tr, vr = _cfg_ratios()
+    train_ratio = train_ratio if train_ratio != 0.7 else tr
+    val_ratio = val_ratio if val_ratio != 0.15 else vr
+    n = len(df)
+    train_end = int(n * train_ratio)
+    val_end = int(n * (train_ratio + val_ratio))
+    return df.iloc[:train_end], df.iloc[train_end:val_end], df.iloc[val_end:].copy()
+
+
+def run_pipeline_from_dataframe(
+    raw_data: pd.DataFrame,
+    initial_bankroll: float = 10000.0,
+    kelly_fraction: float = 0.1,
+    min_ev: float = 0.03,
+    save_model: bool = False,
+    use_ensemble_model: Optional[bool] = None,
+) -> Tuple[pd.DataFrame, Union[QuantModel, EnsembleModel], Dict[str, float], Dict[str, float]]:
+    """Pelny pipeline: cechy -> trening -> backtest na zbiorze testowym."""
+    if len(raw_data) < 200:
+        raise ValueError("Za malo wierszy (min. 200 meczow) do sensownego podzialu train/val/test.")
+
+    from pipeline.feature_builder import build_features, load_patch_history
+
+    patch_df = load_patch_history()
+    processed_data, feature_cols = build_features(raw_data, patch_df=patch_df if not patch_df.empty else None)
+    train_df, val_df, test_df = temporal_split(processed_data)
+
+    model = train_model(feature_cols, train_df, val_df, force_ensemble=use_ensemble_model)
+    preds = model.predict_proba(test_df[feature_cols])
+    test_df = test_df.copy()
     test_df["p_model"] = preds
 
-    backtester = VectorizedBacktester(initial_bankroll=10000.0, kelly_fraction=0.1, min_ev=0.03)
-    results_df, metrics = backtester.run(test_df)
+    model_metrics = evaluate_classifier(test_df[TARGET_COLUMN].values, preds)
+    if isinstance(model, EnsembleModel):
+        model_metrics["ensemble_weights"] = model.weights_dict()
 
-    return results_df, test_df, metrics
+    if save_model:
+        save_trained_model(model)
+
+    backtester = VectorizedBacktester(
+        initial_bankroll=initial_bankroll,
+        kelly_fraction=kelly_fraction,
+        min_ev=min_ev,
+    )
+    results_df, backtest_metrics = backtester.run(test_df)
+    backtest_metrics.update(model_metrics)
+
+    return results_df, model, backtest_metrics, model_metrics
+
+
+def run_pipeline(
+    n_matches: int = 5000,
+    initial_bankroll: float = 10000.0,
+    kelly_fraction: float = 0.1,
+    min_ev: float = 0.03,
+    save_model: bool = False,
+) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, float], float]:
+    raw_data = generate_full_pipeline_data(n_matches)
+    results_df, _model, metrics, model_metrics = run_pipeline_from_dataframe(
+        raw_data,
+        initial_bankroll=initial_bankroll,
+        kelly_fraction=kelly_fraction,
+        min_ev=min_ev,
+        save_model=save_model,
+    )
+    return results_df, raw_data, metrics, model_metrics["roc_auc"]
+
+
+if __name__ == "__main__":
+    print("QuantBet - uruchamianie pipeline (dane syntetyczne)...")
+    results, _test, metrics, auc = run_pipeline(n_matches=5000)
+    print(f"ROC-AUC (test): {auc:.4f} | Log-loss: {metrics['log_loss']:.4f}")
+    print(
+        f"Zaklady: {int(metrics['total_bets'])} | ROI: {metrics['roi']:.2f}% | "
+        f"CLV: {metrics['avg_clv']:.2f}% | Max DD: {metrics['max_drawdown_pct']:.1f}%"
+    )
+    print(f"Bankroll koncowy: {metrics['final_bankroll']:.2f}")
