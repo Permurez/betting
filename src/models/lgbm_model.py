@@ -24,6 +24,7 @@ class QuantModel:
             max_depth=4,
             random_state=42,
             n_jobs=-1,
+            verbose=-1,
         )
         self.calibrated_model = None
 

@@ -13,6 +13,7 @@ GYM_TIERS = {
     "att": 5,
     "city kickboxing": 5,
     "jackson-wink": 5,
+    "jackson wink": 5,
     "aka": 5,
     "american kickboxing academy": 5,
     "wca": 5,
@@ -52,9 +53,9 @@ class GymEvaluator:
             return self._cache[fighter_name]
             
         try:
-            # Używamy natywnego urllib dla stabilności
+            # Używamy natywnego urllib dla stabilności (dodano redirects=1 w API Wiki)
             title = urllib.parse.quote(fighter_name.replace(" ", "_"))
-            url = f"https://en.wikipedia.org/w/api.php?action=query&prop=revisions&rvprop=content&titles={title}&format=json&rvslots=main"
+            url = f"https://en.wikipedia.org/w/api.php?action=query&prop=revisions&rvprop=content&titles={title}&redirects=1&format=json&rvslots=main"
             req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 QuantBetBot'})
             
             with urllib.request.urlopen(req, timeout=10.0) as response:
@@ -69,21 +70,27 @@ class GymEvaluator:
             page = list(pages.values())[0]
             content = page.get("revisions", [{}])[0].get("slots", {}).get("main", {}).get("*", "").lower()
             
-            # Ekstrakcja pola "team" lub "gym" z infoboxa
-            team_match = re.search(r'\|\s*(?:team|gym)\s*=\s*(?:\[\[)?(.*?)(?:\]\]|\n)', content)
+            # Ekstrakcja pola "team" lub "gym" z infoboxa, zabezpieczona pod multiline 'ubl' z re.DOTALL
+            team_match = re.search(r'\|\s*(?:team|gym)\s*=\s*(.*?)(?=\n\s*\|[a-z_0-9]+\s*=)', content, re.DOTALL)
             
             if team_match:
                 extracted_gym = team_match.group(1).strip().lower()
-                extracted_gym = str(extracted_gym).replace("[", "").replace("]", "")
+                # Czyszczenie śmieci ze specyficznych znaczników Wikipedii
+                extracted_gym = re.sub(r'\{\{(?:ubl|plainlist|unbulleted list)\|?', '', extracted_gym)
+                extracted_gym = extracted_gym.replace("[", "").replace("]", "").replace("{", "").replace("}", "")
                 
                 for gym_name, tier in GYM_TIERS.items():
-                    if gym_name in extracted_gym:
+                    # Używamy word bounds (\b) zeby skróty jak "att" (American Top Team) 
+                    # nie łapały słów typu "attack" lub "pattern".
+                    if re.search(r'\b' + re.escape(gym_name) + r'\b', extracted_gym):
                         self._cache[fighter_name] = (tier, gym_name)
                         return tier, gym_name.title()
                 
                 # Znaleziono klub, ale nie ma go w elitarnej topce - Tier 3
-                self._cache[fighter_name] = (3, extracted_gym.title())
-                return 3, extracted_gym.title()
+                # Czyścimy wynik do logowania z resztek tagów 
+                fallback_name = extracted_gym.split('\n')[0][:30].title() + "..."
+                self._cache[fighter_name] = (3, fallback_name)
+                return 3, fallback_name
             
             self._cache[fighter_name] = (2, "No Team Rec.")
             return 2, "No Team Rec."
