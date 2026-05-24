@@ -10,6 +10,7 @@ import pandas as pd
 
 from collectors.base import CollectorResult
 from collectors.datadragon import DataDragonCollector
+from collectors.hltv_scraper import HLTVScraperCollector
 from collectors.news_rss import RSSNewsCollector
 from collectors.odds_api import TheOddsAPICollector
 from collectors.riot_lol import RiotLoLCollector
@@ -19,6 +20,7 @@ from collectors.reddit_crawler import RedditCrawler
 from collectors.stats_pandascore import PandaScoreCollector
 from config_loader import get_cache_dir, load_pipeline_config
 from storage.db import insert_event
+from storage.odds_timeseries import OddsTimeseriesStore
 
 
 class CollectorRunner:
@@ -31,6 +33,7 @@ class CollectorRunner:
         include_odds: bool = True,
         include_instagram: bool = False,
         include_stats: bool = False,
+        include_hltv: bool = True,
         include_riot: bool = False,
         include_patches: bool = True,
     ) -> Dict[str, CollectorResult]:
@@ -50,6 +53,7 @@ class CollectorRunner:
         if include_odds:
             results["odds"] = TheOddsAPICollector().safe_fetch()
             self._save(results["odds"])
+            OddsTimeseriesStore().insert_snapshots(results["odds"].data)
             for _, row in results["odds"].data.iterrows():
                 insert_event(
                     "odds_api",
@@ -58,6 +62,11 @@ class CollectorRunner:
                     entity_id=str(row.get("event_id", "")),
                     fetched_at=now,
                 )
+        if include_hltv:
+            results["hltv"] = HLTVScraperCollector().safe_fetch()
+            self._save(results["hltv"])
+            for _, row in results["hltv"].data.head(200).iterrows():
+                insert_event("hltv_scraper", row.to_dict(), entity_type="match_hint", fetched_at=now)
 
         if include_riot:
             cfg = load_pipeline_config().get("sources", {}).get("riot_lol", {})

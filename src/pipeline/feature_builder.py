@@ -7,6 +7,7 @@ from typing import Optional
 
 import pandas as pd
 
+from config_loader import load_pipeline_config
 from features.lol_features import add_lol_features, resolve_feature_columns
 from main import generate_features as _base_features
 from pipeline.point_in_time import merge_odds_at_decision
@@ -133,7 +134,8 @@ def build_features(
 ) -> tuple[pd.DataFrame, list[str]]:
     df = raw_df.copy()
     if use_point_in_time_odds and odds_snapshots is not None and not odds_snapshots.empty:
-        df = merge_odds_at_decision(df, odds_snapshots)
+        latency = int(load_pipeline_config().get("execution", {}).get("realism", {}).get("execution_latency_minutes", 0))
+        df = merge_odds_at_decision(df, odds_snapshots, latency_minutes=latency)
 
     df = _base_features(df)
     df = add_lol_features(df, patch_dates=patch_df)

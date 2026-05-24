@@ -7,6 +7,7 @@ from main import (
     generate_full_pipeline_data,
     run_pipeline_from_dataframe,
 )
+from pipeline.real_feed import load_pipeline_input_data
 from ui_pipeline import render_paper_panel, render_walk_forward_panel
 from ui_sources import render_sources_panel
 
@@ -18,7 +19,7 @@ st.caption("Value betting: model vs kurs bukmachera, backtest out-of-sample, CLV
 st.sidebar.header("Zrodlo danych")
 data_source = st.sidebar.radio(
     "Dane wejsciowe",
-    ["Symulacja syntetyczna", "Plik CSV"],
+    ["Import API (domyslny)", "Symulacja syntetyczna", "Plik CSV"],
     help="CSV: kolumny jak w szablonie data/sample_matches.csv (min. 200 wierszy).",
 )
 
@@ -36,6 +37,10 @@ uploaded_df = None
 if data_source == "Symulacja syntetyczna":
     n_matches = st.sidebar.select_slider(
         "Liczba meczow", options=[2000, 5000, 10000, 20000], value=5000
+    )
+elif data_source == "Import API (domyslny)":
+    n_matches = st.sidebar.select_slider(
+        "Liczba meczow (API + fallback)", options=[200, 500, 1000, 2000], value=500
     )
 else:
     st.sidebar.download_button(
@@ -91,6 +96,10 @@ if run_clicked:
         with st.spinner("Przygotowanie danych i cech (bez lookahead bias)..."):
             if data_source == "Symulacja syntetyczna":
                 raw_data = generate_full_pipeline_data(n_matches)
+            elif data_source == "Import API (domyslny)":
+                raw_data = load_pipeline_input_data(
+                    n_matches=n_matches, source="api", fallback_to_synthetic=True
+                )
             else:
                 raw_data = uploaded_df
 

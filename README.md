@@ -2,7 +2,7 @@
 
 Wektorowy silnik do analizy meczów e-sportowych: cechy bez wycieku czasowego (lookahead), LightGBM z kalibracją Platta, EV + fractional Kelly i backtest na zbiorze testowym (out-of-sample).
 
-> **Uwaga:** Domyślnie działa na **danych syntetycznych** (symulacja „hype bias” tłumu). To szkielet pod podłączenie PandaScore / Odds API – nie traktuj wyników ROI jako dowodu zysku na prawdziwym rynku.
+> **Uwaga:** Domyślnie pipeline ładuje dane z **API feedu** (PandaScore + Odds API + HLTV scraper) z fallbackiem do danych syntetycznych, gdy feed jest za mały/niedostępny.
 
 ## Struktura
 
@@ -104,12 +104,12 @@ Konfiguracja URL-i i profili: `config/sources.yaml`. Cache: `data/cache/`.
 
 **Instagram:** scraping moze naruszac ToS Meta — na produkcji uzyj oficjalnego API. **Bukmacherzy:** nie scrapujemy stron STS/Betclic (blokady, ToS) — uzywamy agregatora API.
 
-## Następne kroki (produkcja)
+## Storage i realizm backtestu
 
-1. Zastąp `generate_full_pipeline_data()` importem z API (PandaScore, HLTV scraper, Odds API).
-2. Mapowanie nazw drużyn (`team_a` / bukmacher) – słownik lub fuzzy match.
-3. PostgreSQL + TimescaleDB na kursy czasowe.
-4. Limity bukmachera i opóźnienia w backteście – osobna warstwa realizmu.
+- `storage.backend: timescaledb` i `storage.postgres_dsn` w `config/pipeline.yaml` lub `DATABASE_URL` w `.env`.
+- Kursy The Odds API są zapisywane jako snapshoty czasowe (as-of query do point-in-time).
+- Normalizacja nazw drużyn: aliasy + fuzzy fallback (`config/sources.yaml` -> `team_mapping`).
+- Realizm egzekucji (limity bukmachera, latency, slippage): `execution.realism` w `config/pipeline.yaml`.
 
 ## Licencja
 

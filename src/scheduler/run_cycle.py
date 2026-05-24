@@ -19,6 +19,7 @@ def run_cycle(summoner_names: list[str] | None = None) -> Dict[str, Any]:
     results = runner.run_all(
         include_news=True,
         include_odds=True,
+        include_hltv=True,
         include_patches=True,
         include_riot=True,
     )
