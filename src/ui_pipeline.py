@@ -8,7 +8,7 @@ import pandas as pd
 from backtest.walk_forward import run_walk_forward
 from config_loader import load_pipeline_config
 from execution.paper_trader import PaperTrader
-from main import generate_full_pipeline_data
+from pipeline.real_feed import load_pipeline_input_data
 from storage.db import list_paper_bets
 
 
@@ -16,12 +16,17 @@ def render_walk_forward_panel() -> None:
     st.subheader("Walk-forward backtest (ensemble LGBM + MLP)")
     cfg = load_pipeline_config().get("backtest", {})
     n_folds = st.slider("Liczba foldow", 3, 10, cfg.get("walk_forward_folds", 5))
-    n_matches = st.select_slider("Mecze syntetyczne", [2000, 5000, 10000], value=5000)
+    source = st.selectbox("Zrodlo danych", ["API (domyslne)", "Syntetyczne"], index=0)
+    n_matches = st.select_slider("Liczba meczow", [500, 1000, 2000, 5000, 10000], value=2000)
     use_ens = st.checkbox("Ensemble (LGBM + MLP)", value=True)
 
     if st.button("Uruchom walk-forward", type="primary"):
         with st.spinner("Trening wielu okien czasowych..."):
-            raw = generate_full_pipeline_data(n_matches)
+            raw = load_pipeline_input_data(
+                n_matches=n_matches,
+                source="api" if source.startswith("API") else "synthetic",
+                fallback_to_synthetic=True,
+            )
             try:
                 results, summary = run_walk_forward(
                     raw,

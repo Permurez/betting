@@ -32,7 +32,23 @@ stats:
     enabled: false
     games:
       - csgo
+    per_page: 100
+
+hltv:
+  feed_url: https://www.hltv.org/rss/news
+  max_items: 200
+
+team_mapping:
+  fuzzy_threshold: 0.86
+  aliases:
+    navi: Natus Vincere
+    natus vincere: Natus Vincere
+    g2 esports: G2
+    g2 e sports: G2
+    faze clan: FaZe
+    faze: FaZe
+    team liquid: Liquid
+    liquid: Liquid
 
 storage:
   cache_dir: data/cache
-

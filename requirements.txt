@@ -11,6 +11,7 @@ pyyaml>=6.0.0
 python-dotenv>=1.0.0
 scipy>=1.11.0
 apscheduler>=3.10.0
+psycopg>=3.2.9
 
 # Opcjonalnie (Instagram – patrz README):
 # instaloader>=4.10

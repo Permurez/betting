@@ -9,8 +9,10 @@ import pandas as pd
 from config_loader import load_pipeline_config, use_ensemble
 from evaluation import enrich_backtest_metrics, evaluate_classifier
 from features.lol_features import BASE_FEATURE_COLUMNS, resolve_feature_columns
+from backtest.realism import RealismConfig
 from models.ensemble import EnsembleModel
 from models.lgbm_model import QuantModel, MODELS_DIR
+from pipeline.real_feed import load_pipeline_input_data
 
 warnings.filterwarnings("ignore")
 
@@ -164,6 +166,7 @@ class VectorizedBacktester:
         self.bankroll = initial_bankroll
         self.kelly = kelly_fraction
         self.min_ev = min_ev
+        self.realism = RealismConfig.from_config()
 
     def run(self, test_df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, float]]:
         df = test_df.copy()
@@ -189,22 +192,77 @@ class VectorizedBacktester:
             0.15,
         )
 
-        ret_home = np.where(df["target"] == 1, df["odds_home"] - 1, -1.0)
-        ret_away = np.where(df["target"] == 0, df["odds_away"] - 1, -1.0)
-        df["return_factor"] = np.select(
-            [df["bet_side"] == "home", df["bet_side"] == "away"],
-            [ret_home, ret_away],
-            default=0.0,
+        bankroll_now = float(self.bankroll)
+        executed_odds: List[float] = []
+        stake_amounts: List[float] = []
+        returns: List[float] = []
+        strategy_returns: List[float] = []
+        bankroll_curve: List[float] = []
+        side_list = df["bet_side"].tolist()
+
+        for i, side in enumerate(side_list):
+            if side == "none":
+                executed_odds.append(1.0)
+                stake_amounts.append(0.0)
+                returns.append(0.0)
+                strategy_returns.append(0.0)
+                bankroll_curve.append(bankroll_now)
+                continue
+
+            proposed_stake = float(df["stake_fraction"].iloc[i]) * bankroll_now
+            applied = proposed_stake
+            if self.realism.enabled:
+                applied = min(applied, self.realism.bookmaker_max_stake)
+                applied = min(applied, bankroll_now * self.realism.market_max_stake_pct)
+                if applied < self.realism.bookmaker_min_stake:
+                    applied = 0.0
+            if applied <= 0:
+                executed_odds.append(1.0)
+                stake_amounts.append(0.0)
+                returns.append(0.0)
+                strategy_returns.append(0.0)
+                bankroll_curve.append(bankroll_now)
+                continue
+
+            open_odds = float(df["odds_home"].iloc[i] if side == "home" else df["odds_away"].iloc[i])
+            close_odds = float(
+                df["closing_odds_home"].iloc[i] if side == "home" else df["closing_odds_away"].iloc[i]
+            )
+            executed = open_odds
+            if self.realism.enabled:
+                latency = min(max(self.realism.execution_latency_minutes / 60.0, 0.0), 1.0)
+                executed = open_odds + (close_odds - open_odds) * latency
+                executed -= abs(executed) * (self.realism.slippage_bps / 10000.0)
+            executed = max(1.01, float(executed))
+
+            won = (side == "home" and int(df["target"].iloc[i]) == 1) or (side == "away" and int(df["target"].iloc[i]) == 0)
+            ret_factor = executed - 1.0 if won else -1.0
+            pnl = applied * ret_factor
+            bankroll_now += pnl
+
+            executed_odds.append(executed)
+            stake_amounts.append(applied)
+            returns.append(ret_factor)
+            strategy_returns.append(pnl / max(self.bankroll, 1e-9))
+            bankroll_curve.append(bankroll_now)
+
+        df["executed_odds"] = executed_odds
+        df["stake_amount"] = stake_amounts
+        df["return_factor"] = returns
+        df["strategy_return"] = strategy_returns
+        df["bankroll"] = bankroll_curve
+        df["stake_fraction_realized"] = np.where(
+            df["bankroll"].shift(1).fillna(self.bankroll) > 0,
+            df["stake_amount"] / df["bankroll"].shift(1).fillna(self.bankroll),
+            0.0,
         )
 
-        df["strategy_return"] = df["stake_fraction"] * df["return_factor"]
-        df["bankroll"] = self.bankroll * (1 + df["strategy_return"]).cumprod()
-
         placed_mask = df["bet_side"] != "none"
+        placed_mask = placed_mask & (df["stake_amount"] > 0)
         placed_bets = df[placed_mask]
         if len(placed_bets) > 0:
             df.loc[placed_mask, "clv_pct"] = (
-                (df.loc[placed_mask, "bet_odds"] / df.loc[placed_mask, "closing_odds"]) - 1
+                (df.loc[placed_mask, "executed_odds"] / df.loc[placed_mask, "closing_odds"]) - 1
             ) * 100
 
         margin = 1.0
@@ -297,12 +355,13 @@ def run_pipeline_from_dataframe(
 
 def run_pipeline(
     n_matches: int = 5000,
+    data_source: str = "api",
     initial_bankroll: float = 10000.0,
     kelly_fraction: float = 0.1,
     min_ev: float = 0.03,
     save_model: bool = False,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, float], float]:
-    raw_data = generate_full_pipeline_data(n_matches)
+    raw_data = load_pipeline_input_data(n_matches=n_matches, source=data_source, fallback_to_synthetic=True)
     results_df, _model, metrics, model_metrics = run_pipeline_from_dataframe(
         raw_data,
         initial_bankroll=initial_bankroll,
@@ -314,8 +373,8 @@ def run_pipeline(
 
 
 if __name__ == "__main__":
-    print("QuantBet - uruchamianie pipeline (dane syntetyczne)...")
-    results, _test, metrics, auc = run_pipeline(n_matches=10000)
+    print("QuantBet - uruchamianie pipeline (API + fallback syntetyczny)...")
+    results, _test, metrics, auc = run_pipeline(n_matches=10000, data_source="api")
     print(f"ROC-AUC (test): {auc:.4f} | Log-loss: {metrics.get('log_loss', 0.0):.4f}")
     
     print("\n--- Wyniki Backtestu ---")

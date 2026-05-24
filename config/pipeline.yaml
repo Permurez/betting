@@ -51,9 +51,18 @@ execution:
   kelly_fraction: 0.10
   min_ev: 0.03
   max_stake_pct: 0.15
+  realism:
+    enabled: true
+    bookmaker_min_stake: 5.0
+    bookmaker_max_stake: 1000.0
+    market_max_stake_pct: 0.08
+    execution_latency_minutes: 2
+    slippage_bps: 25
 
 scheduler:
   interval_minutes: 30
 
 storage:
+  backend: timescaledb
+  postgres_dsn: ""
   sqlite_path: data/quantbet.db
