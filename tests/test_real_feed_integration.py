@@ -115,3 +115,40 @@ def test_merge_odds_asof_and_realism_limits(monkeypatch):
     )
     assert out.iloc[0]["stake_amount"] <= 80.0  # market_max_stake_pct=0.08 w config
     assert metrics["total_bets"] == 1.0
+
+
+def test_merge_odds_handles_type_case_and_missing_closing(monkeypatch):
+    snapshots = pd.DataFrame(
+        [
+            {"event_id": 10, "home_team": "Natus Vincere", "away_team": "G2", "fetched_at": "2026-01-01T10:00:00Z", "outcome_name": "NATUS VINCERE", "odds": 2.2},
+            {"event_id": 10, "home_team": "Natus Vincere", "away_team": "G2", "fetched_at": "2026-01-01T10:00:00Z", "outcome_name": "g2", "odds": 1.7},
+        ]
+    )
+    monkeypatch.setattr(
+        "pipeline.point_in_time.OddsTimeseriesStore.snapshots_before",
+        lambda self, as_of, event_ids=None: snapshots,
+    )
+    matches = pd.DataFrame(
+        [
+            {
+                "match_id": "10",
+                "date": "2026-01-01T12:00:00Z",
+                "team_a": "natus vincere",
+                "team_b": "G2",
+                "closing_odds_home": None,
+                "closing_odds_away": None,
+            }
+        ]
+    )
+    merged = merge_odds_at_decision(matches, odds_snapshots=None)
+    assert merged.iloc[0]["odds_home"] == 2.2
+    assert merged.iloc[0]["odds_away"] == 1.7
+    assert merged.iloc[0]["closing_odds_home"] == 2.2
+    assert merged.iloc[0]["closing_odds_away"] == 1.7
+
+
+def test_merge_odds_skips_invalid_decision_timestamp():
+    matches = pd.DataFrame([{"match_id": "M1", "date": "invalid-date", "team_a": "A", "team_b": "B"}])
+    merged = merge_odds_at_decision(matches, odds_snapshots=pd.DataFrame())
+    assert len(merged) == 1
+    assert "odds_home" not in merged.columns
